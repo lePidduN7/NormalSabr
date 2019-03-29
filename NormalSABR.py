@@ -1,5 +1,5 @@
 import unittest
-from typing import Callable
+from typing import Callable, List, Union
 import numpy as np
 from numba import jit, vectorize, float64 
 import math
@@ -77,6 +77,12 @@ def normal_volatility(forward_rate, atm_forward_vol,
 
 
 class ShiftedSABRSmile:
+    """
+    This class represents a single maturity smile for an underlying
+    forward rate. The class implements the basis point volatility
+    approximation from Hagan et al. and follows the implementation 
+    of VCUB function from Bloomberg.
+    """
     shifted_forward_rate: float
     atm_forward_volatility: float
     shift: float
@@ -142,8 +148,70 @@ class ShiftedSABRSmile:
         return 1.0/inverse_volatility
 
     def get_forward_rate(self):
+        """
+        Returns the non shifted forward rate.
+        """
         return self.shifted_forward_rate - self.shift
     
+
+class ShiftedSABRSmileSurface:
+    """
+    This class represents a volatility surface, that is the surface
+    of n-maturities and m-strikes. It's a collection of n
+    ShiftedSABRSmile objects, each one referring to one of the 
+    maturities.
+    """
+    shifted_forward_rates: np.ndarray
+    atm_forward_volatilities: np.ndarray
+    shifts: np.ndarray
+    betas: np.ndarray 
+    nu: np.ndarray
+    rho: np.ndarray
+    times_to_maturities: np.ndarray
+    maturity_dates: np.ndarray
+    reference_date: ql.Date
+    day_counter: ql.DayCounter
+
+    def __init__(self, forward_rates: List[float], 
+                    atm_forward_volatilities: List[float],
+                    beta: List[float],
+                    nu: List[float],
+                    rho: List[float],
+                    reference_date: ql.Date,
+                    maturity_dates: List[ql.Date],
+                    shifts: Union(float, List[float])=0.0,
+                    day_counter: ql.DayCounter=ql.Actual365Fixed()) -> None:
+        n_forward_rates = len(forward_rates)
+        n_atm_forward_volatilities = len(atm_forward_volatilities)
+        n_betas = len(beta)
+        n_nu = len(nu)
+        n_rho = len(rho)
+        n_maturity_dates = len(maturity_dates)
+        if type(shifts) == List:
+            n_shifts = len(shifts)
+        else:
+            shifts = [shifts for _ in range(n_forward_rates)]
+            n_shifts = n_forward_rates
+        if not all(v == n_forward_rates for v in [n_atm_forward_volatilities, 
+                                                    n_betas, n_nu, n_rho, 
+                                                    n_maturity_dates, n_shifts]):
+            raise ValueError('Dimensions of parameters should match')
+        self.shifts = np.array(shifts)
+        self.shifted_forward_rates = np.array(forward_rates) + shifts
+        self.atm_forward_volatilities = np.array(atm_forward_volatilities)
+        self.betas = np.array(beta)
+        self.nu = np.array(nu)
+        self.rho = np.array(rho)
+        self.reference_date = reference_date
+        self.maturity_dates = maturity_dates
+        self.times_to_maturities = self.compute_times_to_maturity()
+    
+    def compute_times_to_maturity(self):
+        t0 = self.reference_date
+        for date in self.maturity_dates:
+
+
+
 ##############################################################
 ##############################################################
 ##############################################################
