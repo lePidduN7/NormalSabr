@@ -1,5 +1,5 @@
 import unittest
-from typing import Callable, List, Union
+from typing import Callable, List, Union, Dict
 import numpy as np
 from numba import jit, vectorize, float64 
 import math
@@ -133,13 +133,17 @@ class ShiftedSABRSmile:
                             self.time_to_maturity,
                             self.beta, self.nu, self.rho)  
     
-    def volatility(self, strike) -> float:
+    def volatility(self, strike: Union[np.ndarray, List[float], float]) -> Union[np.ndarray, float]:
         """
         Compute the annualized basis point volatilty according to
         Hagan et. al approximation of SABR model.
         """
+        if type(strike) == type([]):
+            strike = np.array(strike)
+        elif type(strike) == float:
+            strike = np.array([strike])
         strike += self.shift
-        if strike < 0:
+        if any(s < 0 for s in strike):
             raise ValueError('Shifted strike must be non-negative')
         inverse_volatility = normal_volatility(self.shifted_forward_rate, 
                                                 self.atm_forward_volatility,
@@ -147,7 +151,7 @@ class ShiftedSABRSmile:
                                                 self.alpha, self.beta, self.nu, self.rho)
         return 1.0/inverse_volatility
 
-    def get_forward_rate(self):
+    def get_forward_rate(self) -> float:
         """
         Returns the non shifted forward rate.
         """
@@ -164,13 +168,14 @@ class ShiftedSABRSmileSurface:
     shifted_forward_rates: np.ndarray
     atm_forward_volatilities: np.ndarray
     shifts: np.ndarray
-    betas: np.ndarray 
+    betas: np.ndarray
     nu: np.ndarray
     rho: np.ndarray
     times_to_maturities: np.ndarray
     maturity_dates: np.ndarray
     reference_date: ql.Date
     day_counter: ql.DayCounter
+    curves_dictionary = Dict[ql.Date, ShiftedSABRSmile]
 
     def __init__(self, forward_rates: List[float], 
                     atm_forward_volatilities: List[float],
@@ -179,7 +184,7 @@ class ShiftedSABRSmileSurface:
                     rho: List[float],
                     reference_date: ql.Date,
                     maturity_dates: List[ql.Date],
-                    shifts: Union(float, List[float])=0.0,
+                    shifts: Union[float, List[float]]=0.0,
                     day_counter: ql.DayCounter=ql.Actual365Fixed()) -> None:
         n_forward_rates = len(forward_rates)
         n_atm_forward_volatilities = len(atm_forward_volatilities)
@@ -187,7 +192,7 @@ class ShiftedSABRSmileSurface:
         n_nu = len(nu)
         n_rho = len(rho)
         n_maturity_dates = len(maturity_dates)
-        if type(shifts) == List:
+        if type(shifts) == type([]):
             n_shifts = len(shifts)
         else:
             shifts = [shifts for _ in range(n_forward_rates)]
@@ -200,21 +205,52 @@ class ShiftedSABRSmileSurface:
         self.shifted_forward_rates = np.array(forward_rates) + shifts
         self.atm_forward_volatilities = np.array(atm_forward_volatilities)
         self.betas = np.array(beta)
-        self.nu = np.array(nu)
-        self.rho = np.array(rho)
+        self.nus = np.array(nu)
+        self.rhos = np.array(rho)
         self.reference_date = reference_date
-        self.maturity_dates = maturity_dates
-        self.times_to_maturities = self.compute_times_to_maturity()
+        self.maturity_dates = np.array(maturity_dates)
+        self.day_counter = day_counter
+        self.curves_dictionary = self.create_curves_dictionary()
     
-    def compute_times_to_maturity(self):
-        t0 = self.reference_date
-        for date in self.maturity_dates:
-
+    def create_curves_dictionary(self):
+        input_zip = zip(self.shifted_forward_rates, self.atm_forward_volatilities,
+                        self.betas, self.nus, self.rhos, self.maturity_dates, 
+                        self.shifts)
+        curves_dictionary = dict.fromkeys(self.maturity_dates)
+        for fwd, atm_vol, beta, nu, rho, maturity, shift in input_zip:
+            curves_dictionary[maturity] = ShiftedSABRSmile(fwd, atm_vol,
+                                                                beta, nu, rho, 
+                                                                self.reference_date, maturity, 
+                                                                shift, self.day_counter)
+        return curves_dictionary
+    
 
 
 ##############################################################
 ##############################################################
 ##############################################################
+
+
+class ShiftedSABRSurfaceTesting(unittest.TestCase):
+    def setUp(self):
+        strikes_array = list(np.linspace(0.01, 0.05, num=25))
+        forwards_array = list(np.linspace(0.01, 0.05, num=25))
+        atm_vols_array = list(np.linspace(0.0015, 0.0045, num=25))
+        shifts = list(np.ones(25) * 0.03)
+        betas = list(np.ones(25) * 0.6)
+        nus = list(np.random.rand(25))
+        rhos = list(np.random.rand(25) - np.random.rand(25))
+        reference_date = ql.Date(29, 3, 2019)
+        referece_calendar = ql.TARGET()
+        maturity_dates = [referece_calendar.advance(reference_date, y, ql.Years) for y in range(1, 26)]
+        self.DummySurface = ShiftedSABRSmileSurface(forwards_array, atm_vols_array,
+                                                    betas, nus, rhos, reference_date,
+                                                    maturity_dates, shifts)
+
+    def test_SabrSurface_istantiated(self):
+        self.assertEqual(type(self.DummySurface.curves_dictionary), type(dict()))
+
+
 
 class VolatilityFunctionsTesting(unittest.TestCase):
     def setUp(self):
@@ -323,11 +359,29 @@ class ShiftedSABRSmileTesting(unittest.TestCase):
         strike = 0.01
         self.assertGreaterEqual(self.DummySmile.volatility(strike), 0)
 
+    def test_SabrSmile_volatility_curve_is_non_negative(self):
+        forward_rate = self.DummySmile.get_forward_rate()
+        strikes = np.linspace(-0.015, 0.015) + forward_rate
+        smile_curve = self.DummySmile.volatility(strikes)
+        self.assertTrue(all(v > 0 for v in smile_curve))
+    
+    def test_SabrSmile_volatility_returns_array_of_vols_for_array_of_strikes(self):
+        forward_rate = self.DummySmile.get_forward_rate()
+        strikes = np.linspace(-0.015, 0.015) + forward_rate
+        smile_curve = self.DummySmile.volatility(strikes)
+        self.assertEqual(strikes.size, smile_curve.size)
+
     def test_SabrSmile_raises_exception_for_negative_shifted_strike(self):
         strike = -0.05
         with self.assertRaises(ValueError):
             self.DummySmile.volatility(strike)
     
+    def test_SabrSmile_raises_exception_if_any_shifted_strike_is_negative(self):
+        forward_rate = self.DummySmile.get_forward_rate()
+        strikes = np.linspace(-0.08, 0.015) + forward_rate
+        with self.assertRaises(ValueError):
+            self.DummySmile.volatility(strikes)
+
     def test_SabrSmile_volatility_is_stable_around_atm(self):
         otm_strike_offset = 1e-6
         strike_plus = self.DummySmile.get_forward_rate() + otm_strike_offset
