@@ -1,6 +1,8 @@
 import math
+from typing import List
 import numpy as np
 from numba import jit, vectorize, guvectorize, float64
+from lmfit import Parameters
 
 @vectorize([float64(float64, float64, float64, float64, float64, float64)])
 def alpha_root(atm_forward_rate, atm_forward_vol, 
@@ -92,3 +94,37 @@ def normal_volatility_surface(strikes_matrix, betas, nus, rhos,
                                                     alphas[ix], betas[ix],
                                                     nus[ix], rhos[ix])
     
+def volatility_curve_fit_objective_function(params: Parameters,
+                                            forward_rate: float,
+                                            atm_volatility: float,
+                                            time_to_maturity: float,
+                                            strikes_vector: List[float],
+                                            target_volatilities: List[float],
+                                            weights: List[float]) -> List[float]:
+    b, v, p = params['beta'], params['nu'], params['rho']
+    a = alpha_root(forward_rate, atm_volatility, time_to_maturity,
+                    b, v, p)
+    basis_point_vols = 1.0/normal_volatility(forward_rate, atm_volatility,
+                                                strikes_vector, time_to_maturity,
+                                                a, b, v, p)
+    weighted_errors = list((basis_point_vols - np.array(target_volatilities))*np.array(weights))
+    return weighted_errors
+    
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

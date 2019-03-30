@@ -2,7 +2,8 @@ import pytest
 from dataclasses import dataclass
 from typing import List
 import numpy as np
-from numerix import normal_volatility_surface, normal_volatility, alpha_root
+from lmfit import minimize, Parameters
+from numerix import normal_volatility_surface, normal_volatility, alpha_root, volatility_curve_fit_objective_function
 
 @dataclass
 class InitData:
@@ -107,4 +108,28 @@ def test_surface_output_for_zero_offsets_is_the_atm_volatility(setUp):
                                     for ix, _ in enumerate(atm_fwd_vols)])
     assert max_absolute_difference <= 1e-8
 
+
+def curve_fitting():
+    min_beta = 1e-4
+    max_beta = 1 - min_beta
+    sabr_params = Parameters()
+    sabr_params.add('beta', value=0.6, min=min_beta, max=max_beta)
+    sabr_params.add('nu', value=0.45, min=min_beta)
+    sabr_params.add('rho', value=0.0, vary=False)
+    forward_rate = 0.02
+    atm_volatility = 0.0035
+    time_to_maturity = 2.5
+    offsets = [-0.01, -0.005, -0.0025, 0.0025, 0.005, 0.01]
+    strikes = [forward_rate + offset for offset in offsets]
+    volatility_spreads = [-9.26,- 5.32, -2.77, 2.9, 5.88, 11.89]
+    target_volatilities = [atm_volatility + spread*1e-4 for spread in volatility_spreads]
+    weights = [1, 1, 1, 1, 1, 1]
+    opt_results = minimize(volatility_curve_fit_objective_function, sabr_params,
+                            args=(forward_rate, atm_volatility, time_to_maturity, 
+                                    strikes, target_volatilities, weights))
+    opt_results.params.pretty_print()
+    print(opt_results.residual)
+
+if __name__ == "__main__":
+    curve_fitting()
 
