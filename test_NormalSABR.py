@@ -1,5 +1,6 @@
 import pytest
 from dataclasses import dataclass
+from datetime import date, timedelta
 
 import QuantLib as ql
 
@@ -13,9 +14,9 @@ class InitData:
     beta: float = 0.6
     nu: float = 0.45
     rho: float = -0.55 
-    reference_date: ql.Date = ql.Date(29, 3, 2019)
-    maturity_date: ql.Date = ql.Date(28, 3, 2021)
-    day_counter: ql.DayCounter = ql.Actual365Fixed()
+    reference_date: date = date(2019, 3, 28)
+    maturity_date: date = date(2021, 3, 28)
+    day_counter = 'ACT/360'
 
     def get_sabr_parameters(self):
         return self.beta, self.nu, self.rho
@@ -37,6 +38,26 @@ def test_instatiation_correct(basic_setup):
                                     ref_date, end_date,
                                     shift, dc)
 
+def test_update_at_the_money_returns_new_atm_vol(basic_setup):
+    fwd = basic_setup.forward_rate
+    atm_vol = basic_setup.atm_volatility
+    b, v, p = basic_setup.get_sabr_parameters()
+    ref_date = basic_setup.reference_date
+    end_date = basic_setup.maturity_date
+    dc = basic_setup.day_counter
+    shift = basic_setup.shift
+    DummySmile = ShiftedSABRSmile(fwd, atm_vol, b, v, p,
+                                    ref_date, end_date,
+                                    shift, dc)
+    v_0 = DummySmile.volatility(fwd)
+    assert abs(v_0 - atm_vol) <= 1e-6
+    fwd += 0.01
+    atm_vol += 0.0003
+    DummySmile.update_at_the_money(fwd, atm_vol)
+    v_1 = DummySmile.volatility(fwd)
+    assert abs(v_1 - atm_vol) <= 1e-6
+
+
 def test_raise_ValueError_if_negative_shifted_forward(basic_setup):
     fwd = basic_setup.forward_rate
     atm_vol = basic_setup.atm_volatility
@@ -55,7 +76,7 @@ def test_raise_ValueError_if_maturity_is_less_than_ref_date(basic_setup):
     atm_vol = basic_setup.atm_volatility
     b, v, p = basic_setup.get_sabr_parameters()
     ref_date = basic_setup.reference_date
-    end_date = ref_date - 10
+    end_date = ref_date - timedelta(10)
     dc = basic_setup.day_counter
     shift = basic_setup.shift
     with pytest.raises(ValueError):

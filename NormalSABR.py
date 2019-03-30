@@ -1,8 +1,8 @@
-import unittest
+from datetime import date
 from dataclasses import dataclass, field
 from typing import Callable, List, Union, Dict
 import numpy as np
-import QuantLib as ql
+from QuantLib import Date, DayCounter, Actual360, Actual365Fixed, ActualActual
 
 from numerix import alpha_root, normal_volatility
 
@@ -19,13 +19,14 @@ class ShiftedSABRSmile:
     beta: float
     nu: float
     rho: float
-    reference_date: ql.Date
-    maturity_date: ql.Date
+    reference_date: date
+    maturity_date: date
     shift: float = 0.0
+    day_counting: str = 'ACT/ACT'
     shifted_forward_rate: float = field(init=False)
     time_to_maturity: float = field(init=False)
     alpha: float = field(init=False)
-    day_counter: ql.DayCounter = ql.Actual365Fixed()
+    day_counter: DayCounter = field(init=False)
 
     def __post_init__(self) -> None:
         if self.shift < 0.0:
@@ -39,18 +40,35 @@ class ShiftedSABRSmile:
             raise ValueError('Incorrect value of rho parameter')
         if self.maturity_date <= self.reference_date:
             raise ValueError('Maturity cannot be <= than reference date')
+        
+        self.day_counter = self.set_day_counter()        
         self.time_to_maturity = self.compute_time_to_maturity()
         self.alpha = self.update_alpha()
         if self.alpha <= 0:
             raise ValueError('Alpha is negative: check input values')
+
+    def set_day_counter(self, convention: str = 'ACT/ACT') -> DayCounter:
+        """
+        Set DayCounter object based on day counting convention
+        expressed at instantiation.
+        """
+        self.day_counting = convention.upper()
+        if self.day_counting == 'ACT/ACT':
+            return ActualActual()
+        elif self.day_counting == 'ACT/365':
+            return Actual365Fixed()
+        elif self.day_counting == 'ACT/360':
+            return Actual360()
+        else:
+            raise NotImplementedError('Day counting convention no implemented')
 
     def compute_time_to_maturity(self) -> float:
         """
         Compute time to maturity of the smile according to the 
         day counting convention.
         """
-        t0 = self.reference_date
-        t1 = self.maturity_date
+        t0 = Date.from_date(self.reference_date)
+        t1 = Date.from_date(self.maturity_date)
         return self.day_counter.yearFraction(t0, t1)
     
     def update_alpha(self) -> float:
@@ -61,6 +79,15 @@ class ShiftedSABRSmile:
         return alpha_root(self.shifted_forward_rate, self.atm_forward_volatility,
                             self.time_to_maturity,
                             self.beta, self.nu, self.rho)  
+    
+    def update_at_the_money(self, new_forward: float, new_atm_volatility: float) -> None:
+        """
+        Update the smile with real time data and recompute alpha
+        """
+        self.forward_rate = new_forward
+        self.shifted_forward_rate = new_forward + self.shift
+        self.atm_forward_volatility = new_atm_volatility
+        self.alpha = self.update_alpha()
     
     def volatility(self, strike: float) -> float:
         """
@@ -210,91 +237,3 @@ class ShiftedSABRSmile:
 #         n_columns = offsets.size
 #         self.assertEqual(strikes_matrix_shape, (n_rows, n_columns))
 
-
-# class ShiftedSABRSmileTesting(unittest.TestCase):
-#     def setUp(self):
-#         self.times_array = np.linspace(0.25, 20)
-#         self.strikes_array = np.linspace(-0.02, 0.05)
-#         self.forwards_array = np.linspace(-0.02, 0.05)
-#         self.atm_vols_array = np.linspace(0.0015, 0.0045)
-#         self.shift = 0.03
-
-#         dummy_forward = 0.02
-#         dummy_atm_volatility = 0.003
-#         dummy_shift = 0.03
-#         dummy_beta, dummy_nu, dummy_rho = 0.6, 0.45, -0.55
-#         reference_date = ql.Date(29, 3, 2019)
-#         maturity_date = ql.Date(28, 3, 2021)
-
-#         self.DummySmile = ShiftedSABRSmile(dummy_forward, dummy_atm_volatility, 
-#                                             dummy_beta, dummy_nu, dummy_rho,
-#                                             reference_date, maturity_date,
-#                                             shift=dummy_shift)
-
-#     def test_SabrSmile_non_negative_alpha(self):
-#         self.assertGreaterEqual(self.DummySmile.alpha, 0)
-
-#     def test_SabrSmile_non_negative_time_to_maturity(self):
-#         self.assertGreaterEqual(self.DummySmile.time_to_maturity, 0)
-    
-#     def test_SabrSmile_raises_exception_for_negative_shift(self):
-#         dummy_forward = 0.02
-#         dummy_atm_volatility = 0.003
-#         dummy_shift = -0.03
-#         dummy_beta, dummy_nu, dummy_rho = 0.6, 0.45, -0.55
-#         reference_date = ql.Date(29, 3, 2019)
-#         maturity_date = ql.Date(28, 3, 2021)
-#         with self.assertRaises(ValueError):
-#             ShiftedSABRSmile(dummy_forward, dummy_atm_volatility, 
-#                                 dummy_beta, dummy_nu, dummy_rho,
-#                                 reference_date, maturity_date,
-#                                 shift=dummy_shift)
-
-#     def test_SabrSmile_raises_exception_for_negative_shifted_forward_rate(self):
-#         dummy_forward = -0.02
-#         dummy_atm_volatility = 0.003
-#         dummy_shift = 0.015
-#         dummy_beta, dummy_nu, dummy_rho = 0.6, 0.45, -0.55
-#         reference_date = ql.Date(29, 3, 2019)
-#         maturity_date = ql.Date(28, 3, 2021)
-#         with self.assertRaises(ValueError):
-#             ShiftedSABRSmile(dummy_forward, dummy_atm_volatility, 
-#                                 dummy_beta, dummy_nu, dummy_rho,
-#                                 reference_date, maturity_date,
-#                                 shift=dummy_shift)
-
-#     def test_SabrSmile_volatility_is_non_negative(self):
-#         strike = 0.01
-#         self.assertGreaterEqual(self.DummySmile.volatility(strike), 0)
-
-#     def test_SabrSmile_volatility_curve_is_non_negative(self):
-#         forward_rate = self.DummySmile.get_forward_rate()
-#         strikes = np.linspace(-0.015, 0.015) + forward_rate
-#         smile_curve = [self.DummySmile.volatility(s) for s in strikes]
-#         self.assertTrue(all(v > 0 for v in smile_curve))
-    
-#     def test_SabrSmile_volatility_returns_array_of_vols_for_array_of_strikes(self):
-#         forward_rate = self.DummySmile.get_forward_rate()
-#         strikes = np.linspace(-0.015, 0.015) + forward_rate
-#         smile_curve = self.DummySmile.volatility_curve(strikes)
-#         self.assertEqual(strikes.size, len(smile_curve))
-
-#     def test_SabrSmile_raises_exception_for_negative_shifted_strike(self):
-#         strike = -0.05
-#         with self.assertRaises(ValueError):
-#             self.DummySmile.volatility(strike)
-    
-#     def test_SabrSmile_raises_exception_if_any_shifted_strike_is_negative(self):
-#         forward_rate = self.DummySmile.get_forward_rate()
-#         strikes = np.linspace(-0.08, 0.015) + forward_rate
-#         with self.assertRaises(ValueError):
-#             self.DummySmile.volatility(strikes)
-
-#     def test_SabrSmile_volatility_is_stable_around_atm(self):
-#         otm_strike_offset = 1e-6
-#         strike_plus = self.DummySmile.get_forward_rate() + otm_strike_offset
-#         strike_minus = self.DummySmile.get_forward_rate() - otm_strike_offset
-#         otm_volatility_plus = self.DummySmile.volatility(strike_plus)
-#         otm_volatility_minus = self.DummySmile.volatility(strike_minus)
-#         volatility_absolute_difference = abs(otm_volatility_plus - otm_volatility_minus)
-#         self.assertGreaterEqual(2*otm_strike_offset, volatility_absolute_difference)
