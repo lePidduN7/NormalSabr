@@ -39,9 +39,10 @@ class ShiftedSABRSmile:
             raise ValueError('Incorrect value of rho parameter')
         if self.maturity_date <= self.reference_date:
             raise ValueError('Maturity cannot be <= than reference date')
-
         self.time_to_maturity = self.compute_time_to_maturity()
         self.alpha = self.update_alpha()
+        if self.alpha <= 0:
+            raise ValueError('Alpha is negative: check input values')
 
     def compute_time_to_maturity(self) -> float:
         """
