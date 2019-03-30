@@ -105,6 +105,6 @@ def test_surface_output_for_zero_offsets_is_the_atm_volatility(setUp):
                                 bp_vol_surface)
     max_absolute_difference = max([max(abs(atm_fwd_vols[ix] - bp_vol_surface[ix])) 
                                     for ix, _ in enumerate(atm_fwd_vols)])
-    assert max_absolute_difference <= 1e-6
+    assert max_absolute_difference <= 1e-8
 
 
