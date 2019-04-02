@@ -110,7 +110,30 @@ def volatility_curve_fit_objective_function(params: Parameters,
     weighted_errors = list((basis_point_vols - np.array(target_volatilities))*np.array(weights))
     return weighted_errors
     
-
+def volatility_surface_fit_objective_function(params: Parameters,
+                                                forward_rates: List[float],
+                                                atm_volatilities: List[float],
+                                                time_to_maturities: List[float],
+                                                strikes_matrix: List[List[float]],
+                                                target_volatilities: List[List[float]],
+                                                weights: List[List[float]]) -> List[List[float]]:
+    target_volatilities_array = np.array(target_volatilities)
+    weights_array = np.array(weights)
+    n_curves, n_strikes = target_volatilities_array.shape
+    params_vals = params.valuesdict()
+    b = np.fromiter((params_vals['beta{}'.format(i)] for i in range(n_curves)),
+                    dtype=np.float64)
+    v = np.fromiter((params_vals['nu{}'.format(i)] for i in range(n_curves)),
+                    dtype=np.float64)
+    p = np.fromiter((params_vals['rho{}'.format(i)] for i in range(n_curves)),
+                    dtype=np.float64)
+    output_surface = np.zeros((n_curves, n_strikes))
+    normal_volatility_surface(strikes_matrix, b, v, p, forward_rates,
+                                atm_volatilities, time_to_maturities, output_surface)
+    return ((output_surface - target_volatilities_array)*weights_array).flatten().tolist()
+    
+    
+ 
 
 
 
