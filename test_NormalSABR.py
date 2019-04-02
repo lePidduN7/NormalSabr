@@ -1,13 +1,14 @@
 import pytest
+from typing import List, Dict
 from dataclasses import dataclass
 from datetime import date, timedelta
 
 import QuantLib as ql
 
-from NormalSABR import ShiftedSABRSmile
+from NormalSABR import ShiftedSABRSmile, ShiftedSABRSmileSurfaceCalibration
 
 @dataclass
-class InitData:
+class InitData_curve:
     forward_rate: float = 0.02
     atm_volatility: float = 0.003
     shift: float = 0.03
@@ -21,11 +22,87 @@ class InitData:
     def get_sabr_parameters(self):
         return self.beta, self.nu, self.rho
 
+@dataclass
+class InitData_surface:
+    forward_rates: List[float]
+    atm_volatilities: List[float]
+    shift: float
+    beta: List[float]
+    nu: List[float]
+    rho: List[float]
+    reference_date: date
+    maturities: List[date]
+
 @pytest.fixture
 def basic_setup():
-    return InitData()
+    return InitData_curve()
 
-def test_instatiation_correct(basic_setup):
+@pytest.fixture
+def advanced_setup():
+    forward_rates = [0.02, 0.02, 0.02, 0.02, 0.02]
+    atm_volatilities = [0.003,0.003,0.003,0.003,0.003] 
+    shift = 0.03
+    beta = [0.6, 0.6, 0.6, 0.6, 0.6]
+    nu = [0.25,0.25,0.25,0.25,0.25]
+    rho = [0.0, 0.0, 0.0, 0.0, 0.0]
+    reference_date = date(2019, 3, 28)
+    maturities = [date(2020, 3, 28), date(2021, 3, 28), date(2022, 3, 28),
+                    date(2023, 3, 28), date(2024, 3, 28)]
+    init_data_surface = InitData_surface(forward_rates, 
+                                            atm_volatilities,
+                                            shift,
+                                            beta, nu, rho,
+                                            reference_date,
+                                            maturities)
+    return init_data_surface
+
+def advanced_setup_direct():
+    forward_rates = [0.02, 0.02, 0.02, 0.02, 0.02]
+    atm_volatilities = [0.003,0.003,0.003,0.003,0.003] 
+    shift = 0.03
+    beta = [0.6, 0.6, 0.6, 0.6, 0.6]
+    nu = [0.25,0.25,0.25,0.25,0.25]
+    rho = [0.0, 0.0, 0.0, 0.0, 0.0]
+    reference_date = date(2019, 3, 28)
+    maturities = [date(2020, 3, 28), date(2021, 3, 28), date(2022, 3, 28),
+                    date(2023, 3, 28), date(2024, 3, 28)]
+    init_data_surface = InitData_surface(forward_rates, 
+                                            atm_volatilities,
+                                            shift,
+                                            beta, nu, rho,
+                                            reference_date,
+                                            maturities)
+    return init_data_surface
+
+
+def test_surface_instantiation_correct(advanced_setup):
+    fwds = advanced_setup.forward_rates
+    atm_vols = advanced_setup.atm_volatilities
+    shift = advanced_setup.shift
+    ref_date = advanced_setup.reference_date
+    maturity_dates = advanced_setup.maturities
+    DummySurface = ShiftedSABRSmileSurfaceCalibration(ref_date,
+                                                        maturity_dates,
+                                                        fwds,
+                                                        atm_vols,
+                                                        shift)
+
+def test_surface_set_parameters_dictionary(advanced_setup):
+    fwds = advanced_setup.forward_rates
+    atm_vols = advanced_setup.atm_volatilities
+    shift = advanced_setup.shift
+    ref_date = advanced_setup.reference_date
+    maturity_dates = advanced_setup.maturities
+    DummySurface = ShiftedSABRSmileSurfaceCalibration(ref_date,
+                                                        maturity_dates,
+                                                        fwds,
+                                                        atm_vols,
+                                                        shift)
+    DummySurface.set_parameters_dict(False, False, True)
+    DummySurface.parameters_dict.pretty_print()
+   
+
+def test_curve_instatiation_correct(basic_setup):
     fwd = basic_setup.forward_rate
     atm_vol = basic_setup.atm_volatility
     b, v, p = basic_setup.get_sabr_parameters()
@@ -33,7 +110,6 @@ def test_instatiation_correct(basic_setup):
     end_date = basic_setup.maturity_date
     dc = basic_setup.day_counter
     shift = basic_setup.shift
-
     DummySmile = ShiftedSABRSmile(fwd, atm_vol, b, v, p,
                                     ref_date, end_date,
                                     shift, dc)
@@ -129,5 +205,6 @@ def test_volatility_is_non_negative(basic_setup):
 
 
 
-
-
+if __name__ == "__main__":
+    test_surface_set_parameters_dictionary(advanced_setup_direct())
+    

@@ -4,7 +4,8 @@ from typing import Callable, List, Union, Dict
 import numpy as np
 from QuantLib import Date, DayCounter, Actual360, Actual365Fixed, ActualActual
 
-from numerix import alpha_root, normal_volatility
+from numerix import alpha_root, normal_volatility, volatility_surface_fit_objective_function
+from lmfit import Parameters, minimize
 
 @dataclass
 class ShiftedSABRSmile:
@@ -22,7 +23,7 @@ class ShiftedSABRSmile:
     reference_date: date
     maturity_date: date
     shift: float = 0.0
-    day_counting: str = 'ACT/ACT'
+    day_counting: str = 'ACT/365'
     shifted_forward_rate: float = field(init=False)
     time_to_maturity: float = field(init=False)
     alpha: float = field(init=False)
@@ -46,6 +47,36 @@ class ShiftedSABRSmile:
         self.alpha = self.update_alpha()
         if self.alpha <= 0:
             raise ValueError('Alpha is negative: check input values')
+    
+    def __lt__(self, other):
+        if self.maturity_date < other.maturity_date:
+            return True
+        else:
+            return False
+    
+    def __le__(self, other):
+        if self.maturity_date <= other.maturity_date:
+            return True
+        else:
+            return False
+    
+    def __gt__(self, other):
+        if self.maturity_date > other.maturity_date:
+            return True
+        else: 
+            return False
+    
+    def __ge__(self, other):
+        if self.maturity_date >= other.maturity_date:
+            return True
+        else:
+            return False
+    
+    def __eq__(self, other):
+        if self.maturity_date == other.maturity_date:
+            return True
+        else:
+            return False
 
     def set_day_counter(self, convention: str = 'ACT/ACT') -> DayCounter:
         """
@@ -116,124 +147,64 @@ class ShiftedSABRSmile:
                                                 self.alpha, self.beta, self.nu, self.rho)
         return list(1.0/inverse_volatility)
  
-# class ShiftedSABRSmileSurface:
-#     """
-#     This class represents a volatility surface, that is the surface
-#     of n-maturities and m-strikes. It's a collection of n
-#     ShiftedSABRSmile objects, each one referring to one of the 
-#     maturities.
-#     """
-#     shifted_forward_rates: np.ndarray
-#     atm_forward_volatilities: np.ndarray
-#     shifts: np.ndarray
-#     betas: np.ndarray
-#     nu: np.ndarray
-#     rho: np.ndarray
-#     times_to_maturities: np.ndarray
-#     maturity_dates: np.ndarray
-#     reference_date: ql.Date
-#     day_counter: ql.DayCounter
-#     curves_dictionary = Dict[ql.Date, ShiftedSABRSmile]
+@dataclass
+class ShiftedSABRSmileSurfaceCalibration:
+    """
+    This class represents the volatility surface for a given underlying.
+    It takes care of collecting the different quoted smiles as input and 
+    fit a parametrized surface to the normal implied volatilities.
+    """
+    reference_date: date
+    maturities: List[date]
+    atm_forwards: List[float]
+    atm_volatilities: List[float]
+    shift: float
+    curves_dict: Dict[date, ShiftedSABRSmile] = field(init=False)
+    parameters_dict: Parameters = field(init=False)
+    calibrated_parameters_dict: Parameters = field(init=False)
 
-#     def __init__(self, forward_rates: List[float], 
-#                     atm_forward_volatilities: List[float],
-#                     beta: List[float],
-#                     nu: List[float],
-#                     rho: List[float],
-#                     reference_date: ql.Date,
-#                     maturity_dates: List[ql.Date],
-#                     shifts: Union[float, List[float]]=0.0,
-#                     day_counter: ql.DayCounter=ql.Actual365Fixed()) -> None:
-#         n_forward_rates = len(forward_rates)
-#         n_atm_forward_volatilities = len(atm_forward_volatilities)
-#         n_betas = len(beta)
-#         n_nu = len(nu)
-#         n_rho = len(rho)
-#         n_maturity_dates = len(maturity_dates)
-#         if type(shifts) == type([]):
-#             n_shifts = len(shifts)
-#         else:
-#             shifts = [shifts for _ in range(n_forward_rates)]
-#             n_shifts = n_forward_rates
-#         if not all(v == n_forward_rates for v in [n_atm_forward_volatilities, 
-#                                                     n_betas, n_nu, n_rho, 
-#                                                     n_maturity_dates, n_shifts]):
-#             raise ValueError('Dimensions of parameters should match')
-#         self.shifts = np.array(shifts)
-#         self.shifted_forward_rates = np.array(forward_rates) + shifts
-#         self.atm_forward_volatilities = np.array(atm_forward_volatilities)
-#         self.betas = np.array(beta)
-#         self.nus = np.array(nu)
-#         self.rhos = np.array(rho)
-#         self.reference_date = reference_date
-#         self.maturity_dates = np.array(maturity_dates)
-#         self.day_counter = day_counter
-#         self.curves_dictionary = self.create_curves_dictionary()
+    def __post_init__(self):
+        self.curves_dict = dict.fromkeys(self.maturities)
+        for date, forward_rate, atm_volatility in zip(self.maturities,
+                                                        self.atm_forwards,
+                                                        self.atm_volatilities):
+            sabr_vol_curve = ShiftedSABRSmile(forward_rate, atm_volatility, 0.89, 0.25, 0.0,
+                                                self.reference_date, date, self.shift)
+            self.curves_dict.update({date: sabr_vol_curve})
     
-#     def create_curves_dictionary(self) -> Dict[ql.Date, ShiftedSABRSmile]:
-#         """
-#         Instantiates the volatility curves for every maturity
-#         and laod them into a dictionary indexed by maturity dates
-#         """
-#         input_zip = zip(self.shifted_forward_rates, self.atm_forward_volatilities,
-#                         self.betas, self.nus, self.rhos, self.maturity_dates, 
-#                         self.shifts)
-#         curves_dictionary = dict.fromkeys(self.maturity_dates)
-#         for fwd, atm_vol, beta, nu, rho, maturity, shift in input_zip:
-#             curves_dictionary[maturity] = ShiftedSABRSmile(fwd, atm_vol,
-#                                                                 beta, nu, rho, 
-#                                                                 self.reference_date, maturity, 
-#                                                                 shift, self.day_counter)
-#         return curves_dictionary
+    def set_parameters_dict(self, is_beta_fixed: bool=False,
+                            is_nu_fixed: bool=False, 
+                            is_rho_fixed: bool=True) -> None:
+        """
+        This function set the initial Parameters dictionary
+        for the lmfit procedure
+        """
+        self.parameters_dict = Parameters()
+        min_beta = 1e-4
+        max_beta = 1 - min_beta
+        for ix, _ in enumerate(self.maturities):
+            self.parameters_dict.add('beta{}'.format(ix), value=0.89, 
+                                    min=min_beta, max=max_beta,
+                                    vary=not is_beta_fixed)
+            self.parameters_dict.add('nu{}'.format(ix), value=0.1, 
+                                    min=min_beta, 
+                                    vary=not is_beta_fixed)
+            self.parameters_dict.add('rho{}'.format(ix), value=0.0,
+                                    min= -1, max=1, 
+                                    vary=not is_beta_fixed)
     
-#     def make_strikes_matrix(self, offset_array: List[float]):
-#         """
-#         Creates an n-forwards x m-offsets matrix of strikes. Every strike is obtained 
-#         by adding the offset to the forward rate. The offset may or may not contain
-#         the zero and the result is going to be identical since alpha parameter is 
-#         obtained by recovering exactly the atm volatility.
-#         """
-#         return (np.atleast_2d(self.get_forward_rates()).T + np.array(offset_array)).tolist()
+    # def calibrate(self, atm_strike_offsets: List[float], 
+    #                 atm_vols_spreads_matrix: List[List[float]],
+    #                 is_beta_fixed: bool=False,
+    #                 is_nu_fixed: bool=False,
+    #                 is_rho_fixed: bool=True) -> None:
+    #     volatility_smiles = sorted(self.curves_dict.values())
+    #     self.set_parameters_dict(is_beta_fixed, is_nu_fixed, is_rho_fixed)
+    #     strikes_matrix = [[fwd + offset*1e-4 + self.shift for offset in atm_strike_offsets] 
+    #                         for fwd in self.forwa]
 
 
-#     def get_maturity_dates(self):
-#         return self.maturity_dates
-
-#     def get_forward_rates(self):
-#         return self.shifted_forward_rates - self.shifts
+        
+        
+        
     
-
-
-##############################################################
-##############################################################
-##############################################################
-
-
-# class ShiftedSABRSurfaceTesting(unittest.TestCase):
-#     def setUp(self):
-#         strikes_array = list(np.linspace(0.01, 0.05, num=25))
-#         forwards_array = list(np.linspace(0.01, 0.05, num=25))
-#         atm_vols_array = list(np.linspace(0.0015, 0.0045, num=25))
-#         shifts = list(np.ones(25) * 0.03)
-#         betas = list(np.ones(25) * 0.6)
-#         nus = list(np.random.rand(25))
-#         rhos = list(np.random.rand(25) - np.random.rand(25))
-#         reference_date = ql.Date(29, 3, 2019)
-#         referece_calendar = ql.TARGET()
-#         maturity_dates = [referece_calendar.advance(reference_date, y, ql.Years) for y in range(1, 26)]
-#         self.DummySurface = ShiftedSABRSmileSurface(forwards_array, atm_vols_array,
-#                                                     betas, nus, rhos, reference_date,
-#                                                     maturity_dates, shifts)
-
-#     def test_SabrSurface_istantiated(self):
-#         self.assertEqual(type(self.DummySurface.curves_dictionary), type(dict()))
-
-#     def test_SabrSurface_creates_strikes_surface(self):
-#         offsets = np.arange(-0.02, 0.025, 0.005)
-#         forward_rates = self.DummySurface.get_forward_rates()
-#         strikes_matrix = self.DummySurface.make_strikes_matrix(offsets)
-#         strikes_matrix_shape = (len(strikes_matrix), len(strikes_matrix[0]))
-#         n_rows = forward_rates.size
-#         n_columns = offsets.size
-#         self.assertEqual(strikes_matrix_shape, (n_rows, n_columns))
-
