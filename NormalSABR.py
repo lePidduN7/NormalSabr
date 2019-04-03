@@ -4,7 +4,7 @@ from typing import Callable, List, Union, Dict
 import numpy as np
 from QuantLib import Date, DayCounter, Actual360, Actual365Fixed, ActualActual
 
-from numerix import alpha_root, normal_volatility, volatility_surface_fit_objective_function
+from numerix import alpha_root, normal_volatility, normal_volatility_surface
 from lmfit import Parameters, minimize
 
 @dataclass
@@ -182,29 +182,87 @@ class ShiftedSABRSmileSurfaceCalibration:
         self.parameters_dict = Parameters()
         min_beta = 1e-4
         max_beta = 1 - min_beta
-        for ix, _ in enumerate(self.maturities):
-            self.parameters_dict.add('beta{}'.format(ix), value=0.89, 
+        for d in self.maturities:
+            self.parameters_dict.add('beta{:{dfmt}}'.format(d, dfmt='%Y%m%d'), value=0.89, 
                                     min=min_beta, max=max_beta,
                                     vary=not is_beta_fixed)
-            self.parameters_dict.add('nu{}'.format(ix), value=0.1, 
+            self.parameters_dict.add('nu{:{dfmt}}'.format(d, dfmt='%Y%m%d'), value=0.1, 
                                     min=min_beta, 
-                                    vary=not is_beta_fixed)
-            self.parameters_dict.add('rho{}'.format(ix), value=0.0,
+                                    vary=not is_nu_fixed)
+            self.parameters_dict.add('rho{:{dfmt}}'.format(d, dfmt='%Y%m%d'), value=0.0,
                                     min= -1, max=1, 
-                                    vary=not is_beta_fixed)
+                                    vary=not is_rho_fixed)
     
-    # def calibrate(self, atm_strike_offsets: List[float], 
-    #                 atm_vols_spreads_matrix: List[List[float]],
-    #                 is_beta_fixed: bool=False,
-    #                 is_nu_fixed: bool=False,
-    #                 is_rho_fixed: bool=True) -> None:
-    #     volatility_smiles = sorted(self.curves_dict.values())
-    #     self.set_parameters_dict(is_beta_fixed, is_nu_fixed, is_rho_fixed)
-    #     strikes_matrix = [[fwd + offset*1e-4 + self.shift for offset in atm_strike_offsets] 
-    #                         for fwd in self.forwa]
+    def calibrate(self, atm_strike_offsets: List[float], 
+                    atm_vols_spreads_matrix: List[List[float]],
+                    is_beta_fixed: bool=False,
+                    is_nu_fixed: bool=False,
+                    is_rho_fixed: bool=True) -> None:
+        volatility_smiles = sorted(self.curves_dict.values())
+        self.set_parameters_dict(is_beta_fixed, is_nu_fixed, is_rho_fixed)
+        shifted_forwards = [smile.shifted_forward_rate for smile in volatility_smiles]
+        atm_volatilities = [smile.atm_forward_volatility for smile in volatility_smiles]
+        time_to_maturities = [smile.time_to_maturity for smile in volatility_smiles]
+        strikes_matrix = [[shifted_forward + offset*1e-4 for offset in atm_strike_offsets] 
+                            for shifted_forward in shifted_forwards]
+        target_volatilities = [[smile.atm_forward_volatility + vol_spread*1e-4 for vol_spread in atm_vols_spreads_matrix[ix]] 
+                                for ix, smile in enumerate(volatility_smiles)]
+        weights_matrix = [[1.0 for _ in atm_strike_offsets]
+                            for _ in volatility_smiles]
+        calibration_output = minimize(volatility_surface_fit_objective_function,
+                                        self.parameters_dict,
+                                        args=(self.maturities,
+                                                shifted_forwards,
+                                                atm_volatilities,
+                                                time_to_maturities,
+                                                strikes_matrix,
+                                                target_volatilities,
+                                                weights_matrix))
+        return calibration_output
 
+def volatility_curve_fit_objective_function(params: Parameters,
+                                            curve_object: ShiftedSABRSmile,
+                                            strikes_vector: List[float],
+                                            target_volatilities: List[float],
+                                            weights: List[float]) -> List[float]:
+    forward_rate = ShiftedSABRSmile.shifted_forward_rate
+    atm_volatility = ShiftedSABRSmile.atm_forward_volatility
+    time_to_maturity = ShiftedSABRSmile.time_to_maturity
+    params_values_dict = params.valuesdict()
+    b = params_values_dict['beta']
+    v = params_values_dict['nu']
+    p = params_values_dict['rho']
+    a = alpha_root(forward_rate, atm_volatility, time_to_maturity,
+                    b, v, p)
+    basis_point_vols = 1.0/normal_volatility(forward_rate, atm_volatility,
+                                                strikes_vector, time_to_maturity,
+                                                a, b, v, p)
+    weighted_errors = list((basis_point_vols - np.array(target_volatilities))*np.array(weights))
+    return weighted_errors
+    
+def volatility_surface_fit_objective_function(params: Parameters,
+                                                maturity_dates: List[date],
+                                                forward_rates: List[float],
+                                                atm_volatilities: List[float],
+                                                time_to_maturities: List[float],
+                                                strikes_matrix: List[List[float]],
+                                                target_volatilities: List[List[float]],
+                                                weights: List[List[float]]) -> List[List[float]]:
+    target_volatilities_array = np.array(target_volatilities)
+    weights_array = np.array(weights)
+    n_curves, n_strikes = target_volatilities_array.shape
+    params_vals = params.valuesdict()
+    b = np.fromiter((params_vals['beta{:{dfmt}}'.format(d, dfmt='%Y%m%d')] for d in maturity_dates),
+                    dtype=np.float64)
+    v = np.fromiter((params_vals['nu{:{dfmt}}'.format(d, dfmt='%Y%m%d')] for d in maturity_dates),
+                    dtype=np.float64)
+    p = np.fromiter((params_vals['rho{:{dfmt}}'.format(d, dfmt='%Y%m%d')] for d in maturity_dates),
+                    dtype=np.float64)
+    output_surface = np.zeros((n_curves, n_strikes))
+    normal_volatility_surface(strikes_matrix, b, v, p, forward_rates,
+                                atm_volatilities, time_to_maturities, output_surface)
+    return ((output_surface - target_volatilities_array)*weights_array).flatten().tolist()
+        
+        
 
-        
-        
-        
     
